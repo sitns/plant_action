@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.env.*
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+captures/
+.vscode/
+rknn3588-yolov8/result/
+rknn3588-yolov8/yolov8_stream/.vscode/
+rknn3588-yolov8/yolov8_stream/out.h264
+rknn3588-yolov8/yolov8_stream/out.jpg
+rknn3588-yolov8/yolov8_stream/result.jpg
+rknn3588-yolov8/yolov8_stream/tenoutput.yuv
