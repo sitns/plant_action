@@ -15,3 +15,7 @@ rknn3588-yolov8/yolov8_stream/out.h264
 rknn3588-yolov8/yolov8_stream/out.jpg
 rknn3588-yolov8/yolov8_stream/result.jpg
 rknn3588-yolov8/yolov8_stream/tenoutput.yuv
+plant_system.db
+plant_system.db-shm
+plant_system.db-wal
+recognition_results/

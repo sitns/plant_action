@@ -10,7 +10,7 @@ class SensorDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("智能植物管护系统 - 环境传感器")
-        self.resize(1280, 900)
+        self.resize(1420, 980)
         self.init_ui()
 
     def init_ui(self):
@@ -22,12 +22,12 @@ class SensorDashboard(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
 
         title = QLabel("智能植物管护系统")
-        title.setFont(QFont("Microsoft YaHei", 20, QFont.Weight.Bold))
+        title.setFont(QFont("Microsoft YaHei", 26, QFont.Weight.Bold))
         title.setStyleSheet("color: #1f2a24;")
         main_layout.addWidget(title)
 
         subtitle = QLabel("环境传感器监控与风扇控制")
-        subtitle.setStyleSheet("color: #47554d; font-size: 12px;")
+        subtitle.setStyleSheet("color: #47554d; font-size: 15px;")
         main_layout.addWidget(subtitle)
 
         main_layout.addWidget(SensorPanel(), 1)
@@ -39,6 +39,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("智能植物管护系统")
+    app.setFont(QFont("Microsoft YaHei", 12))
 
     window = SensorDashboard()
     window.show()

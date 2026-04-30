@@ -3,6 +3,9 @@ import json
 import threading
 import time
 from collections import deque
+from pathlib import Path
+
+from data_store import record_sensor_data
 
 from PyQt6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QValueAxis
 from PyQt6.QtCore import QDateTime, Qt, QTimer, pyqtSignal
@@ -34,6 +37,8 @@ CHAR_UUID = "abcdefab-1234-5678-9abc-def012345678"
 FAN_CHAR_UUID = "fedcba98-7654-3210-fedc-ba9876543210"
 MAX_POINTS = 240
 WRITE_PROPERTIES = ("write", "write-without-response")
+BASE_DIR = Path(__file__).resolve().parent
+COMBO_ARROW_ICON = (BASE_DIR / "combo_arrow_dark.svg").as_posix()
 
 DASHBOARD_COLORS = {
     "bg": "#f2efe8",
@@ -157,7 +162,8 @@ def build_dashboard_stylesheet(include_tabs: bool = False) -> str:
                 background-color: {DASHBOARD_COLORS['header_a']};
                 color: {DASHBOARD_COLORS['ink']};
                 min-width: 140px;
-                padding: 10px 20px;
+                padding: 12px 22px;
+                font-size: 15px;
                 border-top-left-radius: 10px;
                 border-top-right-radius: 10px;
                 margin-right: 6px;
@@ -175,9 +181,10 @@ def build_dashboard_stylesheet(include_tabs: bool = False) -> str:
         QWidget {{
             color: {DASHBOARD_COLORS['ink']};
             font-family: "Microsoft YaHei";
+            font-size: 15px;
         }}
         QGroupBox {{
-            font-size: 14px;
+            font-size: 18px;
             font-weight: 600;
             color: {DASHBOARD_COLORS['ink']};
             border: 1px solid {DASHBOARD_COLORS['border']};
@@ -196,8 +203,8 @@ def build_dashboard_stylesheet(include_tabs: bool = False) -> str:
             color: {DASHBOARD_COLORS['panel']};
             border: none;
             border-radius: 999px;
-            padding: 8px 16px;
-            font-size: 12px;
+            padding: 10px 18px;
+            font-size: 15px;
             font-weight: 700;
         }}
         QPushButton:hover {{
@@ -218,17 +225,174 @@ def build_dashboard_stylesheet(include_tabs: bool = False) -> str:
             border: 1px solid {DASHBOARD_COLORS['border']};
             border-radius: 12px;
             color: {DASHBOARD_COLORS['ink']};
-            font-size: 13px;
+            font-size: 15px;
             selection-background-color: {DASHBOARD_COLORS['accent']};
+        }}
+        QLineEdit, QDoubleSpinBox, QSpinBox {{
+            background-color: {DASHBOARD_COLORS['card']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
+            border-radius: 12px;
+            color: {DASHBOARD_COLORS['ink']};
+            padding: 8px 12px;
+            font-size: 15px;
+            selection-background-color: {DASHBOARD_COLORS['accent']};
+        }}
+        QDateTimeEdit, QComboBox {{
+            background-color: {DASHBOARD_COLORS['panel']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
+            border-radius: 12px;
+            color: {DASHBOARD_COLORS['ink']};
+            padding: 8px 12px;
+            font-size: 15px;
+            selection-background-color: {DASHBOARD_COLORS['accent']};
+        }}
+        QDateTimeEdit:focus, QComboBox:focus, QDateTimeEdit:on, QComboBox:on {{
+            border: 1px solid {DASHBOARD_COLORS['accent']};
+            outline: 0;
+        }}
+        QComboBox, QDateTimeEdit {{
+            padding-right: 32px;
+        }}
+        QComboBox::drop-down, QDateTimeEdit::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 28px;
+            border: 0;
+            background-color: {DASHBOARD_COLORS['panel']};
+            border-top-right-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }}
+        QComboBox::down-arrow, QDateTimeEdit::down-arrow {{
+            image: url({COMBO_ARROW_ICON});
+            width: 12px;
+            height: 8px;
+        }}
+        QComboBox QAbstractItemView, QCalendarWidget QAbstractItemView {{
+            background-color: {DASHBOARD_COLORS['panel']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
+            color: {DASHBOARD_COLORS['ink']};
+            selection-background-color: {DASHBOARD_COLORS['header_a']};
+            selection-color: {DASHBOARD_COLORS['ink']};
+            outline: 0;
+        }}
+        QCalendarWidget QWidget {{
+            alternate-background-color: {DASHBOARD_COLORS['panel']};
+        }}
+        QCalendarWidget QWidget#qt_calendar_navigationbar {{
+            background-color: {DASHBOARD_COLORS['panel']};
+        }}
+        QCalendarWidget QToolButton {{
+            color: {DASHBOARD_COLORS['ink']};
+            background-color: {DASHBOARD_COLORS['panel']};
+            border: 0;
+            padding: 6px 10px;
+        }}
+        QCalendarWidget QMenu {{
+            background-color: {DASHBOARD_COLORS['panel']};
+            color: {DASHBOARD_COLORS['ink']};
+        }}
+        QCalendarWidget QSpinBox {{
+            background-color: {DASHBOARD_COLORS['panel']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
+            border-radius: 8px;
+            color: {DASHBOARD_COLORS['ink']};
+            padding: 4px 8px;
+        }}
+        QTableWidget {{
+            background-color: {DASHBOARD_COLORS['bg']};
+            alternate-background-color: {DASHBOARD_COLORS['panel']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
+            border-radius: 12px;
+            color: {DASHBOARD_COLORS['ink']};
+            gridline-color: {DASHBOARD_COLORS['border']};
+        }}
+        QTableWidget::item {{
+            padding: 6px;
+        }}
+        QTableWidget::item:selected {{
+            background-color: {DASHBOARD_COLORS['header_a']};
+            color: {DASHBOARD_COLORS['ink']};
+        }}
+        QHeaderView::section {{
+            background-color: {DASHBOARD_COLORS['header_a']};
+            color: {DASHBOARD_COLORS['ink']};
+            border: 0;
+            border-bottom: 1px solid {DASHBOARD_COLORS['border']};
+            border-right: 1px solid {DASHBOARD_COLORS['border']};
+            padding: 8px 10px;
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        QTableCornerButton::section {{
+            background-color: {DASHBOARD_COLORS['header_a']};
+            border: 1px solid {DASHBOARD_COLORS['border']};
         }}
         QScrollArea {{
             border: 0;
             background: transparent;
         }}
+        QScrollBar:vertical {{
+            background-color: {DASHBOARD_COLORS['header_b']};
+            width: 14px;
+            margin: 2px 2px 2px 0;
+            border-radius: 7px;
+        }}
+        QScrollBar::handle:vertical {{
+            background-color: #c9c1b2;
+            min-height: 42px;
+            border-radius: 7px;
+            border: 1px solid #bdb3a2;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background-color: #aa9b84;
+            border: 1px solid #96866d;
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background-color: {DASHBOARD_COLORS['secondary']};
+            border: 1px solid {DASHBOARD_COLORS['secondary_hover']};
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+            border: none;
+            background: transparent;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: transparent;
+            border-radius: 7px;
+        }}
+        QScrollBar:horizontal {{
+            background-color: {DASHBOARD_COLORS['header_b']};
+            height: 14px;
+            margin: 0 2px 2px 2px;
+            border-radius: 7px;
+        }}
+        QScrollBar::handle:horizontal {{
+            background-color: #c9c1b2;
+            min-width: 42px;
+            border-radius: 7px;
+            border: 1px solid #bdb3a2;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background-color: #aa9b84;
+            border: 1px solid #96866d;
+        }}
+        QScrollBar::handle:horizontal:pressed {{
+            background-color: {DASHBOARD_COLORS['secondary']};
+            border: 1px solid {DASHBOARD_COLORS['secondary_hover']};
+        }}
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            width: 0px;
+            border: none;
+            background: transparent;
+        }}
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: transparent;
+            border-radius: 7px;
+        }}
         QCheckBox, QRadioButton {{
             spacing: 6px;
             color: {DASHBOARD_COLORS['ink']};
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
         }}
         QCheckBox::indicator, QRadioButton::indicator {{
@@ -412,6 +576,10 @@ def handle_notification(_sender, data: bytearray) -> None:
         }
         with history_lock:
             history.append(point)
+        try:
+            record_sensor_data(point)
+        except Exception as exc:  # pylint: disable=broad-except
+            update_status("warn", f"database write failed: {exc}")
     except (TypeError, ValueError, json.JSONDecodeError):
         update_status("warn", f"invalid payload: {text[:50]}")
 
@@ -553,20 +721,45 @@ def _value_range(values, default_range, include_zero=False, fixed_range=None):
     return lower - padding, upper + padding
 
 
+def get_live_monitor_snapshot():
+    with history_lock:
+        status_snapshot = dict(ble_status)
+        snapshot = list(history)
+        fan_snapshot = dict(fan_control_state)
+    latest = snapshot[-1] if snapshot else None
+    return status_snapshot, snapshot, fan_snapshot, latest
+
+
 class SensorPanel(QWidget):
     fan_command_finished = pyqtSignal(bool, str, int)
 
-    def __init__(self):
+    def __init__(
+        self,
+        show_header: bool = True,
+        show_controls: bool = True,
+        show_cards: bool = True,
+        show_charts: bool = True,
+        live_refresh: bool = True,
+    ):
         super().__init__()
+        self.show_header = show_header
+        self.show_controls = show_controls
+        self.show_cards = show_cards
+        self.show_charts = show_charts
+        self.live_refresh = live_refresh
         self.metric_checkboxes = {}
         self.metric_cards = {}
         self.combined_series = {}
         self.single_axes = {}
         self.split_cards = {}
         self._last_snapshot = []
+        self.external_snapshot = None
         self.fan_request_pending = False
         self.fan_slider_dirty = False
 
+        self.header_frame = None
+        self.controls_frame = None
+        self.chart_section_frame = None
         self.status_label = None
         self.air_temperature_value = None
         self.air_humidity_value = None
@@ -586,30 +779,66 @@ class SensorPanel(QWidget):
         self.split_chart_frame = None
         self.single_chart = None
         self.single_axis_x = None
+        self.single_chart_radio = None
+        self.split_chart_radio = None
         self.climate_humidity_axis = None
         self.climate_temperature_axis = None
+        self.timer = None
 
         self._build_ui()
         self.fan_command_finished.connect(self._handle_fan_command_finished)
-        self.start_refresh()
+        if self.live_refresh:
+            self.start_refresh()
+        else:
+            status_snapshot, snapshot, fan_snapshot, _latest = get_live_monitor_snapshot()
+            self._apply_runtime_snapshot(status_snapshot, snapshot, fan_snapshot)
 
     def _build_ui(self):
+        self.setObjectName("sensorPanelRoot")
+        self.setStyleSheet(
+            f"""
+            QWidget#sensorPanelRoot,
+            QWidget#sensorScrollViewport,
+            QWidget#sensorScrollContent {{
+                background-color: {DASHBOARD_COLORS['bg']};
+            }}
+            QScrollArea#sensorScrollArea {{
+                background-color: {DASHBOARD_COLORS['bg']};
+                border: 0;
+            }}
+            """
+        )
+
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
 
         scroll = QScrollArea()
+        scroll.setObjectName("sensorScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.viewport().setObjectName("sensorScrollViewport")
 
         content = QWidget()
+        content.setObjectName("sensorScrollContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(4, 4, 4, 4)
         content_layout.setSpacing(16)
 
-        content_layout.addWidget(self._create_header())
-        content_layout.addWidget(self._create_controls())
-        content_layout.addLayout(self._create_cards_grid())
-        content_layout.addWidget(self._create_chart_section())
+        if self.show_header:
+            self.header_frame = self._create_header()
+            content_layout.addWidget(self.header_frame)
+
+        if self.show_charts and self.show_controls:
+            self.controls_frame = self._create_controls()
+            content_layout.addWidget(self.controls_frame)
+
+        if self.show_cards:
+            content_layout.addLayout(self._create_cards_grid())
+
+        if self.show_charts:
+            self.chart_section_frame = self._create_chart_section()
+            content_layout.addWidget(self.chart_section_frame)
+
         content_layout.addStretch(1)
 
         scroll.setWidget(content)
@@ -634,12 +863,12 @@ class SensorPanel(QWidget):
         layout.setSpacing(6)
 
         title = QLabel("环境实时监控面板")
-        title.setFont(QFont("Microsoft YaHei", 16, QFont.Weight.Bold))
+        title.setFont(QFont("Microsoft YaHei", 22, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
         layout.addWidget(title)
 
         self.status_label = QLabel("BLE状态: 等待连接...")
-        self.status_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
+        self.status_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 16px;")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         return frame
@@ -656,7 +885,7 @@ class SensorPanel(QWidget):
             }}
             QLabel {{
                 color: {DASHBOARD_COLORS['muted']};
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: 700;
             }}
             """
@@ -715,8 +944,8 @@ class SensorPanel(QWidget):
         pressure_card, self.pressure_hpa_value = self._create_value_card("气压", "-- hPa", METRIC_CONFIG["pressure"]["color"])
         fan_pwm_card, self.fan_pwm_value = self._create_value_card("风扇 PWM", "0 %", DASHBOARD_COLORS["secondary"])
         fan_control_card = self._create_fan_control_card()
-        sensor_state_card, self.sensor_state_value = self._create_value_card("传感器状态", "--", DASHBOARD_COLORS["ink"], font_size=16)
-        packet_time_card, self.packet_time_value = self._create_value_card("最后上报时间", "--", DASHBOARD_COLORS["ink"], font_size=18)
+        sensor_state_card, self.sensor_state_value = self._create_value_card("传感器状态", "--", DASHBOARD_COLORS["ink"], font_size=20)
+        packet_time_card, self.packet_time_value = self._create_value_card("最后上报时间", "--", DASHBOARD_COLORS["ink"], font_size=22)
 
         self.metric_cards = {
             "temperature": temperature_card,
@@ -748,7 +977,7 @@ class SensorPanel(QWidget):
         frame.setStyleSheet(
             f"""
             QFrame#dashboardCard {{
-                background-color: {DASHBOARD_COLORS['card']};
+                background-color: {DASHBOARD_COLORS['panel']};
                 border: 1px solid {DASHBOARD_COLORS['border']};
                 border-radius: 12px;
             }}
@@ -756,14 +985,14 @@ class SensorPanel(QWidget):
         )
         return frame
 
-    def _create_value_card(self, title, value, color, font_size=28):
+    def _create_value_card(self, title, value, color, font_size=34):
         frame = self._create_card_frame()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 12px;")
+        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 14px;")
         layout.addWidget(title_label)
 
         value_label = QLabel(value)
@@ -781,20 +1010,20 @@ class SensorPanel(QWidget):
         layout.setSpacing(10)
 
         title_label = QLabel("风扇控制")
-        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 12px;")
+        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 14px;")
         layout.addWidget(title_label)
 
         info_row = QHBoxLayout()
         info_row.setSpacing(12)
 
         self.fan_slider_value = QLabel("0 %")
-        self.fan_slider_value.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
+        self.fan_slider_value.setFont(QFont("Microsoft YaHei", 24, QFont.Weight.Bold))
         self.fan_slider_value.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
         info_row.addWidget(self.fan_slider_value)
 
         self.fan_hint_label = QLabel("通过 BLE 设置风扇转速")
         self.fan_hint_label.setWordWrap(True)
-        self.fan_hint_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 12px;")
+        self.fan_hint_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 14px;")
         info_row.addWidget(self.fan_hint_label, 1)
         layout.addLayout(info_row)
 
@@ -886,12 +1115,13 @@ class SensorPanel(QWidget):
 
         title_label = QLabel(title)
         title_label.setStyleSheet(
-            f"background-color: {DASHBOARD_COLORS['panel']}; color: {DASHBOARD_COLORS['muted_dark']}; "
-            f"font-size: 12px; font-weight: 700; padding: 10px 12px; border-bottom: 1px solid {DASHBOARD_COLORS['border']};"
+            f"background-color: {DASHBOARD_COLORS['header_a']}; color: {DASHBOARD_COLORS['muted_dark']}; "
+            f"font-size: 14px; font-weight: 700; padding: 10px 12px; border-bottom: 1px solid {DASHBOARD_COLORS['border']};"
         )
         layout.addWidget(title_label)
 
         chart_host = QWidget()
+        chart_host.setStyleSheet(f"background-color: {DASHBOARD_COLORS['panel']};")
         chart_layout = QVBoxLayout(chart_host)
         chart_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(chart_host)
@@ -900,7 +1130,9 @@ class SensorPanel(QWidget):
     def _create_chart_base(self, chart_layout, legend_visible, min_height):
         chart = QChart()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
-        chart.setBackgroundBrush(QColor(DASHBOARD_COLORS["card"]))
+        chart.setBackgroundBrush(QColor(DASHBOARD_COLORS["panel"]))
+        chart.setPlotAreaBackgroundVisible(True)
+        chart.setPlotAreaBackgroundBrush(QColor(DASHBOARD_COLORS["panel"]))
         chart.setTitleBrush(QColor(DASHBOARD_COLORS["ink"]))
         legend = chart.legend()
         if legend is not None:
@@ -1012,12 +1244,20 @@ class SensorPanel(QWidget):
         self._refresh_charts(self._last_snapshot)
 
     def _apply_chart_mode(self):
+        if (
+            self.single_chart_frame is None
+            or self.split_chart_frame is None
+            or self.single_chart_radio is None
+        ):
+            return
         use_split = self.split_chart_radio.isChecked()
         self.single_chart_frame[0].setVisible(not use_split)
         self.split_chart_frame.setVisible(use_split)
         self._apply_metric_visibility()
 
     def _apply_metric_visibility(self):
+        if self.single_chart is None or not self.split_cards:
+            return
         active_metrics = self.active_metrics()
 
         for key, series in self.combined_series.items():
@@ -1051,6 +1291,8 @@ class SensorPanel(QWidget):
         self.fan_slider_value.setText(f"{value} %")
 
     def _sync_slider(self, value):
+        if self.fan_slider is None or self.fan_slider_value is None:
+            return
         self.fan_slider.blockSignals(True)
         self.fan_slider.setValue(value)
         self.fan_slider.blockSignals(False)
@@ -1088,15 +1330,19 @@ class SensorPanel(QWidget):
 
     def _handle_fan_command_finished(self, ok, message, percent):
         self.fan_request_pending = False
-        self.apply_fan_button.setEnabled(True)
-        self.stop_fan_button.setEnabled(True)
+        if self.apply_fan_button is not None:
+            self.apply_fan_button.setEnabled(True)
+        if self.stop_fan_button is not None:
+            self.stop_fan_button.setEnabled(True)
 
         if ok:
             self.fan_slider_dirty = False
-            self.fan_hint_label.setText(f"风扇已设置为 {percent}%")
+            if self.fan_hint_label is not None:
+                self.fan_hint_label.setText(f"风扇已设置为 {percent}%")
             update_status("connected", f"fan set to {percent}%")
         else:
-            self.fan_hint_label.setText(f"控制失败: {message}")
+            if self.fan_hint_label is not None:
+                self.fan_hint_label.setText(f"控制失败: {message}")
 
     def _stop_fan(self):
         self._sync_slider(0)
@@ -1104,33 +1350,50 @@ class SensorPanel(QWidget):
         self._send_fan_pwm(0)
 
     def start_refresh(self):
+        if self.timer is not None:
+            self.timer.stop()
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_data)
         self.timer.start(1000)
         self.refresh_data()
 
     def active_metrics(self):
+        if not self.metric_checkboxes:
+            return set(METRIC_ORDER)
         return {key for key, checkbox in self.metric_checkboxes.items() if checkbox.isChecked()}
 
     def refresh_data(self):
-        with history_lock:
-            status_snapshot = dict(ble_status)
-            snapshot = list(history)
-            fan_snapshot = dict(fan_control_state)
+        status_snapshot, live_snapshot, fan_snapshot, _latest = get_live_monitor_snapshot()
+        snapshot = list(self.external_snapshot) if self.external_snapshot is not None else live_snapshot
+        self._apply_runtime_snapshot(status_snapshot, snapshot, fan_snapshot)
 
-        self._last_snapshot = snapshot
-        self.status_label.setText(
-            f"BLE状态: {status_snapshot.get('state', '--')} | {status_snapshot.get('message', '--')}"
+    def set_snapshot(self, snapshot, status_snapshot=None, fan_snapshot=None):
+        self.external_snapshot = list(snapshot)
+        live_status_snapshot, _live_snapshot, live_fan_snapshot, _latest = get_live_monitor_snapshot()
+        self._apply_runtime_snapshot(
+            status_snapshot or live_status_snapshot,
+            self.external_snapshot,
+            fan_snapshot or live_fan_snapshot,
         )
+
+    def _apply_runtime_snapshot(self, status_snapshot, snapshot, fan_snapshot):
+        self._last_snapshot = snapshot
+
+        if self.status_label is not None:
+            self.status_label.setText(
+                f"BLE状态: {status_snapshot.get('state', '--')} | {status_snapshot.get('message', '--')}"
+            )
 
         fan_controls_enabled = (
             status_snapshot.get("state") == "connected"
             and fan_snapshot.get("supported", False)
             and not self.fan_request_pending
         )
-        self.apply_fan_button.setEnabled(fan_controls_enabled)
-        self.stop_fan_button.setEnabled(fan_controls_enabled)
-        if not self.fan_request_pending:
+        if self.apply_fan_button is not None:
+            self.apply_fan_button.setEnabled(fan_controls_enabled)
+        if self.stop_fan_button is not None:
+            self.stop_fan_button.setEnabled(fan_controls_enabled)
+        if self.fan_hint_label is not None and not self.fan_request_pending:
             if not fan_snapshot.get("supported", False):
                 self.fan_hint_label.setText(f"风扇控制不可用: {fan_snapshot.get('message', '--')}")
             elif status_snapshot.get("state") != "connected":
@@ -1138,35 +1401,69 @@ class SensorPanel(QWidget):
 
         if snapshot:
             latest = snapshot[-1]
-            self.air_temperature_value.setText(
-                "-- C" if latest.get("air_temperature") is None else f"{latest['air_temperature']:.1f} C"
-            )
-            self.air_humidity_value.setText(
-                "-- %" if latest.get("air_humidity") is None else f"{latest['air_humidity']:.0f} %"
-            )
-            self.soil_humidity_value.setText(
-                "--" if latest.get("soil_humidity") is None else f"{latest['soil_humidity']}"
-            )
-            self.wind_speed_value.setText(
-                "-- m/s" if latest.get("wind_speed") is None else f"{latest['wind_speed']:.2f} m/s"
-            )
-            self.light_lux_value.setText(
-                "-- lx" if latest.get("light_lux") is None else f"{latest['light_lux']:.0f} lx"
-            )
-            self.pressure_hpa_value.setText(
-                "-- hPa" if latest.get("pressure_hpa") is None else f"{latest['pressure_hpa']:.1f} hPa"
-            )
+            if self.air_temperature_value is not None:
+                self.air_temperature_value.setText(
+                    "-- C" if latest.get("air_temperature") is None else f"{latest['air_temperature']:.1f} C"
+                )
+            if self.air_humidity_value is not None:
+                self.air_humidity_value.setText(
+                    "-- %" if latest.get("air_humidity") is None else f"{latest['air_humidity']:.0f} %"
+                )
+            if self.soil_humidity_value is not None:
+                self.soil_humidity_value.setText(
+                    "--" if latest.get("soil_humidity") is None else f"{latest['soil_humidity']}"
+                )
+            if self.wind_speed_value is not None:
+                self.wind_speed_value.setText(
+                    "-- m/s" if latest.get("wind_speed") is None else f"{latest['wind_speed']:.2f} m/s"
+                )
+            if self.light_lux_value is not None:
+                self.light_lux_value.setText(
+                    "-- lx" if latest.get("light_lux") is None else f"{latest['light_lux']:.0f} lx"
+                )
+            if self.pressure_hpa_value is not None:
+                self.pressure_hpa_value.setText(
+                    "-- hPa" if latest.get("pressure_hpa") is None else f"{latest['pressure_hpa']:.1f} hPa"
+                )
 
             fan_pwm = latest.get("fan_pwm_percent")
-            self.fan_pwm_value.setText("-- %" if fan_pwm is None else f"{fan_pwm} %")
-            if fan_pwm is not None and not self.fan_slider_dirty and not self.fan_request_pending:
+            if self.fan_pwm_value is not None:
+                self.fan_pwm_value.setText("-- %" if fan_pwm is None else f"{fan_pwm} %")
+            if (
+                fan_pwm is not None
+                and self.fan_slider is not None
+                and not self.fan_slider_dirty
+                and not self.fan_request_pending
+            ):
                 self._sync_slider(fan_pwm)
 
-            self.sensor_state_value.setText(_format_sensor_status(latest))
-            self.packet_time_value.setText(_format_packet_time(latest.get("ts")))
+            if self.sensor_state_value is not None:
+                self.sensor_state_value.setText(_format_sensor_status(latest))
+            if self.packet_time_value is not None:
+                self.packet_time_value.setText(_format_packet_time(latest.get("ts")))
+        else:
+            if self.air_temperature_value is not None:
+                self.air_temperature_value.setText("-- C")
+            if self.air_humidity_value is not None:
+                self.air_humidity_value.setText("-- %")
+            if self.soil_humidity_value is not None:
+                self.soil_humidity_value.setText("--")
+            if self.wind_speed_value is not None:
+                self.wind_speed_value.setText("-- m/s")
+            if self.light_lux_value is not None:
+                self.light_lux_value.setText("-- lx")
+            if self.pressure_hpa_value is not None:
+                self.pressure_hpa_value.setText("-- hPa")
+            if self.fan_pwm_value is not None:
+                self.fan_pwm_value.setText("-- %")
+            if self.sensor_state_value is not None:
+                self.sensor_state_value.setText("--")
+            if self.packet_time_value is not None:
+                self.packet_time_value.setText("--")
 
-        self._apply_metric_visibility()
-        self._refresh_charts(snapshot)
+        if self.show_charts and self.single_chart is not None:
+            self._apply_metric_visibility()
+            self._refresh_charts(snapshot)
 
     def _refresh_charts(self, snapshot):
         self._update_combined_chart(snapshot)
