@@ -21,6 +21,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QFont, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDateTimeEdit,
@@ -60,7 +61,8 @@ from data_store import (  # noqa: E402
     record_recognition_result,
     verify_login,
 )
-from func import CLASSES, detect_frame, translate_label  # noqa: E402
+from func import CLASSES, detect_frame, detect_frame_dispatch, translate_label  # noqa: E402
+import func as func_mod  # noqa: E402
 from rknnpool import rknnPoolExecutor  # noqa: E402
 from environment_monitor import (  # noqa: E402
     DASHBOARD_COLORS,
@@ -711,6 +713,7 @@ class VideoRecognitionWorker(QObject):
         self.model_path = str(model_path)
         self.username = username
         self.pool = None
+        func_mod.LEAF_SCAN_MODE = True
 
     @pyqtSlot()
     def setup(self):
@@ -722,7 +725,7 @@ class VideoRecognitionWorker(QObject):
             self.pool = rknnPoolExecutor(
                 rknnModel=self.model_path,
                 TPEs=THREAD_COUNT,
-                func=detect_frame,
+                func=detect_frame_dispatch,
             )
             self.ready_changed.emit(True, "检测状态: 主画面识别模型已就绪")
         except Exception as exc:  # pylint: disable=broad-except
@@ -779,6 +782,7 @@ class VideoDetectionPanel(QWidget):
         self.result_image_label = None
         self.time_label = None
         self.recognition_content_view = None
+        self.leaf_scan_checkbox = None
         self.alert_scroll = None
         self.alert_cards_layout = None
         self.alert_empty_label = None
@@ -850,6 +854,11 @@ class VideoDetectionPanel(QWidget):
         self.time_label = QLabel("--:--:--")
         self.time_label.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 16px; font-weight: 700;")
 
+        self.leaf_scan_checkbox = QCheckBox("叶片扫描")
+        self.leaf_scan_checkbox.setToolTip("启用后将对植物区域放大扫描，检测叶片级病虫害")
+        self.leaf_scan_checkbox.setChecked(True)
+        self.leaf_scan_checkbox.toggled.connect(self._handle_leaf_scan_toggled)
+
         user_label = QLabel(f"当前用户: {self.username}")
         user_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
 
@@ -859,6 +868,8 @@ class VideoDetectionPanel(QWidget):
         control_row.addWidget(interval_label)
         control_row.addWidget(self.interval_spin)
         control_row.addStretch(1)
+        control_row.addWidget(self.leaf_scan_checkbox)
+        control_row.addSpacing(12)
         control_row.addWidget(self.time_label)
         control_row.addSpacing(16)
         control_row.addWidget(user_label)
@@ -1279,6 +1290,9 @@ class VideoDetectionPanel(QWidget):
     def update_status(self, text):
         pass
 
+    def _handle_leaf_scan_toggled(self, checked):
+        func_mod.LEAF_SCAN_MODE = bool(checked)
+
     def _update_time(self):
         if self.time_label is not None:
             self.time_label.setText(time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -1291,6 +1305,7 @@ class VideoDetectionPanel(QWidget):
     def shutdown(self):
         self.environment_timer.stop()
         self.time_timer.stop()
+        func_mod.LEAF_SCAN_MODE = False
         self.stop_stream()
         if self.worker_thread is not None:
             self.worker_thread.quit()

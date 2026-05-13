@@ -1434,5 +1434,203 @@ def detect_frame(rknn_lite, image):
 
 
 def myFunc(rknn_lite, image):
-    result = detect_frame(rknn_lite, image)
+    result = detect_frame_dispatch(rknn_lite, image)
     return result["image"]
+
+
+def generate_windows(image, window_size=640, stride=420, min_overlap=0.3):
+    h, w = image.shape[:2]
+    if h <= window_size and w <= window_size:
+        return [(image, 0, 0, 1.0)]
+
+    windows = []
+    for y in range(0, max(1, h - window_size + 1), stride):
+        for x in range(0, max(1, w - window_size + 1), stride):
+            crop = image[y:y + window_size, x:x + window_size]
+            windows.append((crop, x, y, 1.0))
+
+    if h > window_size:
+        right_x = max(0, w - window_size)
+        bottom_y = h - window_size
+        if right_x % stride != 0 or bottom_y % stride != 0:
+            crop = image[bottom_y:h, right_x:w]
+            windows.append((crop, right_x, bottom_y, 1.0))
+
+    if w > window_size:
+        right_x = w - window_size
+        for y in range(0, max(1, h - window_size + 1), stride):
+            if h > window_size and y + window_size > h - window_size:
+                continue
+            crop = image[y:y + window_size, right_x:w]
+            windows.append((crop, right_x, y, 1.0))
+
+    if h > window_size:
+        bottom_y = h - window_size
+        for x in range(0, max(1, w - window_size + 1), stride):
+            if w > window_size and x + window_size > w - window_size:
+                continue
+            crop = image[bottom_y:h, x:x + window_size]
+            windows.append((crop, x, bottom_y, 1.0))
+
+    return windows
+
+
+def _detect_on_crop(rknn_lite, crop, offset_x, offset_y, scale):
+    global OBJ_THRESH
+    original_thresh = OBJ_THRESH
+    OBJ_THRESH = 0.15
+    try:
+        input_image = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        input_image, ratio, padding = letterbox(input_image)
+        input_image = np.expand_dims(input_image, 0)
+        outputs = rknn_lite.inference(inputs=[input_image], data_format=["nhwc"])
+        boxes, classes, scores, top_candidates = yolov8_post_process(outputs)
+
+        detections = []
+        if boxes is not None:
+            detections = build_detections(boxes, scores, classes, ratio, padding, crop.shape)
+            detections = [d for d in detections if d["score"] >= 0.2]
+            for det in detections:
+                x1, y1, x2, y2 = det["box"]
+                det["box"] = (
+                    int(round(x1 / scale + offset_x)),
+                    int(round(y1 / scale + offset_y)),
+                    int(round(x2 / scale + offset_x)),
+                    int(round(y2 / scale + offset_y)),
+                )
+    finally:
+        OBJ_THRESH = original_thresh
+    return detections, top_candidates
+
+
+_PEST_CLASS_IDS = None
+
+
+def _get_pest_class_ids():
+    global _PEST_CLASS_IDS
+    if _PEST_CLASS_IDS is None:
+        _PEST_CLASS_IDS = set()
+        for i, label in enumerate(CLASSES):
+            if "healthy" not in label.lower() and "___" in label:
+                _PEST_CLASS_IDS.add(i)
+    return _PEST_CLASS_IDS
+
+
+def _iou(box_a, box_b):
+    xa = max(box_a[0], box_b[0])
+    ya = max(box_a[1], box_b[1])
+    xb = min(box_a[2], box_b[2])
+    yb = min(box_a[3], box_b[3])
+    inter = max(0, xb - xa) * max(0, yb - ya)
+    area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+    area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0
+
+
+def _merge_detections(detections, iou_threshold=0.5):
+    pest_ids = _get_pest_class_ids()
+    detections.sort(key=lambda d: d["score"], reverse=True)
+    keep = []
+    for det in detections:
+        suppressed = False
+        for kept in keep:
+            if det["class_id"] != kept["class_id"]:
+                continue
+            if _iou(det["box"], kept["box"]) >= iou_threshold:
+                suppressed = True
+                break
+        if not suppressed:
+            keep.append(det)
+    return keep
+
+
+def detect_frame_leaf_scan(rknn_lite, image):
+    annotated = image.copy()
+    img_h, img_w = image.shape[:2]
+    pest_ids = _get_pest_class_ids()
+    all_detections = []
+    top_candidates_global = []
+
+    input_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    input_img, ratio, padding = letterbox(input_img)
+    input_img = np.expand_dims(input_img, 0)
+    outputs = rknn_lite.inference(inputs=[input_img], data_format=["nhwc"])
+    boxes, classes, scores, tc = yolov8_post_process(outputs)
+    top_candidates_global = tc
+
+    plant_boxes = []
+    if boxes is not None:
+        full_dets = build_detections(boxes, scores, classes, ratio, padding, image.shape)
+        for det in full_dets:
+            if det["class_id"] not in pest_ids:
+                plant_boxes.append(det["box"])
+            all_detections.append(det)
+
+    if not plant_boxes:
+        base_window = 640
+        if img_w < 800 and img_h < 600:
+            base_window = 352
+        stride = int(base_window * 0.5)
+        windows = generate_windows(image, window_size=base_window, stride=stride)
+        for crop, offset_x, offset_y, scale in windows:
+            window_dets, _ = _detect_on_crop(rknn_lite, crop, offset_x, offset_y, scale)
+            for det in window_dets:
+                if det["class_id"] in pest_ids:
+                    all_detections.append(det)
+    else:
+        for x1, y1, x2, y2 in plant_boxes:
+            margin_w = int((x2 - x1) * 0.15)
+            margin_h = int((y2 - y1) * 0.15)
+            cx1 = max(0, x1 - margin_w)
+            cy1 = max(0, y1 - margin_h)
+            cx2 = min(img_w, x2 + margin_w)
+            cy2 = min(img_h, y2 + margin_h)
+            crop = image[cy1:cy2, cx1:cx2]
+            ch, cw = crop.shape[:2]
+            if ch < 32 or cw < 32:
+                continue
+            target_size = 640
+            if max(ch, cw) < 200:
+                target_size = 320
+            crop_resized = cv2.resize(crop, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
+            scale = target_size / max(ch, cw)
+            window_dets, _ = _detect_on_crop(rknn_lite, crop_resized, cx1, cy1, scale)
+            for det in window_dets:
+                if det["class_id"] in pest_ids:
+                    all_detections.append(det)
+
+    plant_dets = [d for d in all_detections if d["class_id"] not in pest_ids]
+    pest_dets = [d for d in all_detections if d["class_id"] in pest_ids]
+    pest_dets = _merge_detections(pest_dets, iou_threshold=0.4)
+
+    all_detections = plant_dets + pest_dets
+
+    colors = [
+        (57, 130, 247),
+        (46, 168, 120),
+        (64, 89, 255),
+        (33, 64, 25),
+    ]
+    annotated = image.copy()
+    for index, detection in enumerate(all_detections):
+        x1, y1, x2, y2 = detection["box"]
+        label = translate_label(detection["label"])
+        color = colors[index % len(colors)]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        draw_label(annotated, label, x1, y1, color)
+
+    return {
+        "image": annotated,
+        "detections": all_detections,
+        "top_candidates": top_candidates_global,
+    }
+
+
+LEAF_SCAN_MODE = False
+
+
+def detect_frame_dispatch(rknn_lite, image):
+    if LEAF_SCAN_MODE:
+        return detect_frame_leaf_scan(rknn_lite, image)
+    return detect_frame(rknn_lite, image)
