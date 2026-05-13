@@ -10,7 +10,10 @@ class SensorDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("智能植物管护系统 - 环境传感器")
-        self.resize(1420, 980)
+        screen_geom = QApplication.primaryScreen().availableGeometry()
+        target_w = min(screen_geom.width(), 1420)
+        target_h = min(screen_geom.height(), 980)
+        self.resize(target_w, target_h)
         self.init_ui()
 
     def init_ui(self):

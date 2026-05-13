@@ -60,7 +60,7 @@ from data_store import (  # noqa: E402
     record_recognition_result,
     verify_login,
 )
-from func import CLASSES, detect_frame  # noqa: E402
+from func import CLASSES, detect_frame, translate_label  # noqa: E402
 from rknnpool import rknnPoolExecutor  # noqa: E402
 from environment_monitor import (  # noqa: E402
     DASHBOARD_COLORS,
@@ -195,18 +195,16 @@ def cv_to_qimage(frame):
 def format_label_for_display(label):
     if not label:
         return "--"
-    if "___" not in label:
-        return label.replace("_", " ")
-    plant_name, detail = label.split("___", 1)
-    return f"{plant_name.replace('_', ' ')} / {detail.replace('_', ' ')}"
+    return translate_label(label)
 
 
 def extract_plant_name(label):
     if not label:
         return "未知植物"
-    if "___" in label:
-        return label.split("___", 1)[0].replace("_", " ")
-    return label.replace("_", " ")
+    result = translate_label(label)
+    if " / " in result:
+        return result.split(" / ")[0]
+    return result
 
 
 def build_default_threshold_settings():
@@ -303,7 +301,7 @@ def build_recognition_content_lines(payload):
     )
     for index, (name, info) in enumerate(sorted_groups, start=1):
         suffix = " | 含病虫害风险" if info["has_pest"] else ""
-        lines.append(f"{index}. {name} | 数量 {info['count']} | 最高置信度 {info['best_score']:.2f}{suffix}")
+        lines.append(f"{index}. {name} | 数量 {info['count']}{suffix}")
     return lines
 
 
@@ -337,7 +335,7 @@ def build_realtime_alert_items(payload, latest_sensor, threshold_settings):
                     "title": "病虫害告警",
                     "body": (
                         f"时间 {pest_time_text} | {format_label_for_display(label)} | "
-                        f"关联植被 {info['plant_name']} | 数量 {info['count']} | 最高置信度 {info['best_score']:.2f}"
+                        f"关联植被 {info['plant_name']} | 数量 {info['count']}"
                     ),
                     "level": "danger",
                 }
@@ -367,7 +365,7 @@ def format_top3_lines(candidates):
     if not candidates:
         return ["未获得候选类别"]
     return [
-        f"Top {index}. {format_label_for_display(item['label'])} | {item['score']:.2f}"
+        f"Top {index}. {format_label_for_display(item['label'])}"
         for index, item in enumerate(candidates[:3], start=1)
     ]
 
@@ -379,7 +377,7 @@ def format_detection_lines(detections):
     for index, detection in enumerate(detections[:8], start=1):
         x1, y1, x2, y2 = detection["box"]
         lines.append(
-            f"{index}. {format_label_for_display(detection['label'])} | {detection['score']:.2f} | ({x1}, {y1})-({x2}, {y2})"
+            f"{index}. {format_label_for_display(detection['label'])} | ({x1}, {y1})-({x2}, {y2})"
         )
     if len(detections) > 8:
         lines.append(f"... 其余 {len(detections) - 8} 个结果已省略")
@@ -779,8 +777,7 @@ class VideoDetectionPanel(QWidget):
 
         self.source_combo = None
         self.result_image_label = None
-        self.status_label = None
-        self.result_label = None
+        self.time_label = None
         self.recognition_content_view = None
         self.alert_scroll = None
         self.alert_cards_layout = None
@@ -796,6 +793,8 @@ class VideoDetectionPanel(QWidget):
         self.detect_timer.timeout.connect(self._request_detection)
         self.environment_timer = QTimer(self)
         self.environment_timer.timeout.connect(self._refresh_environment_panel)
+        self.time_timer = QTimer(self)
+        self.time_timer.timeout.connect(self._update_time)
 
         self._build_ui()
         self._setup_worker()
@@ -805,8 +804,11 @@ class VideoDetectionPanel(QWidget):
         self.panel_active = active
         if active:
             self._refresh_environment_panel()
+            self._update_time()
             if not self.environment_timer.isActive():
                 self.environment_timer.start(1000)
+            if not self.time_timer.isActive():
+                self.time_timer.start(1000)
             if self.capture is None:
                 QTimer.singleShot(0, self.start_stream)
             else:
@@ -817,16 +819,17 @@ class VideoDetectionPanel(QWidget):
             self.preview_timer.stop()
             self.detect_timer.stop()
             self.environment_timer.stop()
+            self.time_timer.stop()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
+        layout.setSpacing(8)
 
         control_row = QHBoxLayout()
         control_row.setSpacing(12)
 
         source_label = QLabel("视频源")
-        source_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 15px;")
+        source_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
 
         self.source_combo = QComboBox()
         for option in VIDEO_SOURCE_OPTIONS:
@@ -835,7 +838,7 @@ class VideoDetectionPanel(QWidget):
         self.source_combo.currentIndexChanged.connect(self._handle_source_changed)
 
         interval_label = QLabel("识别间隔(秒)")
-        interval_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 15px;")
+        interval_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
 
         self.interval_spin = QDoubleSpinBox()
         self.interval_spin.setDecimals(1)
@@ -844,8 +847,11 @@ class VideoDetectionPanel(QWidget):
         self.interval_spin.setValue(DEFAULT_DETECTION_INTERVAL)
         self.interval_spin.valueChanged.connect(self._restart_detection_timer)
 
+        self.time_label = QLabel("--:--:--")
+        self.time_label.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 16px; font-weight: 700;")
+
         user_label = QLabel(f"当前用户: {self.username}")
-        user_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 15px;")
+        user_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
 
         control_row.addWidget(source_label)
         control_row.addWidget(self.source_combo)
@@ -853,44 +859,33 @@ class VideoDetectionPanel(QWidget):
         control_row.addWidget(interval_label)
         control_row.addWidget(self.interval_spin)
         control_row.addStretch(1)
+        control_row.addWidget(self.time_label)
+        control_row.addSpacing(16)
         control_row.addWidget(user_label)
         layout.addLayout(control_row)
 
         auto_hint = QLabel("进入页面后自动开始识别，优先使用本地视频流，不可用时回退到摄像头。")
         auto_hint.setWordWrap(True)
-        auto_hint.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 14px;")
+        auto_hint.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
         layout.addWidget(auto_hint)
-
-        self.status_label = QLabel("检测状态: 正在准备主画面自动识别...")
-        self.status_label.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 16px; font-weight: 600;")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
-        self.result_label = QLabel("识别结果: 等待首帧识别结果")
-        self.result_label.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 18px; font-weight: 700;")
-        self.result_label.setWordWrap(True)
-        layout.addWidget(self.result_label)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         result_group = QGroupBox("识别画面")
         result_layout = QVBoxLayout(result_group)
         self.result_image_label = QLabel("正在接入视频流并等待识别结果...")
         self.result_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.result_image_label.setMinimumSize(840, 520)
+        self.result_image_label.setMinimumSize(320, 240)
         self.result_image_label.setStyleSheet(
             f"background-color: {DASHBOARD_COLORS['card']}; color: {DASHBOARD_COLORS['muted_dark']}; "
             f"border-radius: 14px; border: 1px solid {DASHBOARD_COLORS['border']};"
         )
         result_layout.addWidget(self.result_image_label)
-        splitter.addWidget(result_group)
 
         environment_group = QGroupBox("环境信息")
         environment_layout = QVBoxLayout(environment_group)
-        environment_layout.setSpacing(12)
+        environment_layout.setSpacing(8)
         environment_grid = QGridLayout()
-        environment_grid.setHorizontalSpacing(12)
-        environment_grid.setVerticalSpacing(12)
+        environment_grid.setHorizontalSpacing(8)
+        environment_grid.setVerticalSpacing(8)
 
         card_definitions = [
             ("air_temperature", "空气温度", ENVIRONMENT_THRESHOLD_MAP["air_temperature"]["card_color"]),
@@ -910,23 +905,18 @@ class VideoDetectionPanel(QWidget):
         self.environment_status_label = QLabel("等待环境数据...")
         self.environment_status_label.setWordWrap(True)
         self.environment_status_label.setStyleSheet(
-            f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 14px; line-height: 1.5;"
+            f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px; line-height: 1.4;"
         )
 
         environment_layout.addLayout(environment_grid)
         environment_layout.addStretch(1)
         environment_layout.addWidget(self.environment_status_label)
-        splitter.addWidget(environment_group)
-        splitter.setSizes([1120, 540])
-        layout.addWidget(splitter, 1)
-
-        text_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         content_group = QGroupBox("识别内容")
         content_layout = QVBoxLayout(content_group)
         self.recognition_content_view = QTextEdit()
         self.recognition_content_view.setReadOnly(True)
-        self.recognition_content_view.setMinimumHeight(190)
+        self.recognition_content_view.setMinimumHeight(80)
         self.recognition_content_view.setPlainText("等待识别结果...")
         content_layout.addWidget(self.recognition_content_view)
 
@@ -934,7 +924,7 @@ class VideoDetectionPanel(QWidget):
         alert_layout = QVBoxLayout(alert_group)
         self.alert_empty_label = QLabel("当前无实时报警")
         self.alert_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.alert_empty_label.setMinimumHeight(190)
+        self.alert_empty_label.setMinimumHeight(80)
         self.alert_empty_label.setStyleSheet(
             "background-color: #fff6f6; color: #7f8b85; border: 1px dashed #efb0b0; border-radius: 14px;"
         )
@@ -943,7 +933,7 @@ class VideoDetectionPanel(QWidget):
         self.alert_scroll.setObjectName("alertScroll")
         self.alert_scroll.setWidgetResizable(True)
         self.alert_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.alert_scroll.setMinimumHeight(190)
+        self.alert_scroll.setMinimumHeight(80)
         self.alert_scroll.viewport().setObjectName("alertScrollViewport")
         self.alert_scroll.setStyleSheet(
             f"""
@@ -969,11 +959,28 @@ class VideoDetectionPanel(QWidget):
 
         alert_layout.addWidget(self.alert_empty_label)
         alert_layout.addWidget(self.alert_scroll)
-        
-        text_splitter.addWidget(content_group)
-        text_splitter.addWidget(alert_group)
-        text_splitter.setSizes([640, 640])
-        layout.addWidget(text_splitter)
+
+        top_splitter = QSplitter(Qt.Orientation.Horizontal)
+        top_splitter.setChildrenCollapsible(False)
+        top_splitter.addWidget(result_group)
+        top_splitter.addWidget(environment_group)
+        top_splitter.setStretchFactor(0, 1)
+        top_splitter.setStretchFactor(1, 1)
+
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+        bottom_splitter.setChildrenCollapsible(False)
+        bottom_splitter.addWidget(content_group)
+        bottom_splitter.addWidget(alert_group)
+        bottom_splitter.setStretchFactor(0, 1)
+        bottom_splitter.setStretchFactor(1, 1)
+
+        main_vsplit = QSplitter(Qt.Orientation.Vertical)
+        main_vsplit.setChildrenCollapsible(False)
+        main_vsplit.addWidget(top_splitter)
+        main_vsplit.addWidget(bottom_splitter)
+        main_vsplit.setStretchFactor(0, 1)
+        main_vsplit.setStretchFactor(1, 1)
+        layout.addWidget(main_vsplit, 1)
         self._render_alert_cards(build_realtime_alert_items(None, None, self.threshold_settings))
 
     def _create_environment_card(self, title, value, color):
@@ -982,16 +989,16 @@ class VideoDetectionPanel(QWidget):
             f"background-color: {DASHBOARD_COLORS['panel']}; border: 1px solid {DASHBOARD_COLORS['border']}; border-radius: 12px;"
         )
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 14px;")
+        title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted']}; font-size: 13px;")
         layout.addWidget(title_label)
 
         value_label = QLabel(value)
         value_label.setWordWrap(True)
-        value_label.setFont(QFont("Microsoft YaHei", 22, QFont.Weight.Bold))
+        value_label.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
         value_label.setStyleSheet(f"color: {color};")
         layout.addWidget(value_label)
         layout.addStretch(1)
@@ -1061,8 +1068,6 @@ class VideoDetectionPanel(QWidget):
         if self.result_image_label is not None:
             self.result_image_label.setPixmap(QPixmap())
             self.result_image_label.setText("正在接入视频流并等待识别结果...")
-        if self.result_label is not None:
-            self.result_label.setText("识别结果: 等待首帧识别结果")
         if self.recognition_content_view is not None:
             self.recognition_content_view.setPlainText("等待识别结果...")
 
@@ -1167,8 +1172,6 @@ class VideoDetectionPanel(QWidget):
     def _handle_detection_result(self, image, payload):
         self.last_payload = payload
         self._show_image_on_label(self.result_image_label, image)
-        if self.result_label is not None:
-            self.result_label.setText(f"识别结果: {payload['summary']}")
         if self.recognition_content_view is not None:
             self.recognition_content_view.setPlainText("\n".join(build_recognition_content_lines(payload)))
         self._refresh_environment_panel()
@@ -1274,10 +1277,11 @@ class VideoDetectionPanel(QWidget):
         return frame
 
     def update_status(self, text):
-        if not text.startswith("检测状态:"):
-            text = f"检测状态: {text}"
-        if self.status_label is not None:
-            self.status_label.setText(text)
+        pass
+
+    def _update_time(self):
+        if self.time_label is not None:
+            self.time_label.setText(time.strftime("%Y-%m-%d %H:%M:%S"))
 
     def resizeEvent(self, event):
         if self.latest_display_image is not None and self.result_image_label is not None:
@@ -1286,6 +1290,7 @@ class VideoDetectionPanel(QWidget):
 
     def shutdown(self):
         self.environment_timer.stop()
+        self.time_timer.stop()
         self.stop_stream()
         if self.worker_thread is not None:
             self.worker_thread.quit()
@@ -1355,23 +1360,23 @@ class EnvironmentControlPanel(QWidget):
         content.setObjectName("environmentControlContent")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(16)
+        layout.setSpacing(10)
 
         title = QLabel("环境阈值与管控控制")
-        title.setFont(QFont("Microsoft YaHei", 22, QFont.Weight.Bold))
+        title.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
         layout.addWidget(title)
 
         self.status_label = QLabel("BLE状态: 等待连接...")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 15px;")
+        self.status_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 14px;")
         layout.addWidget(self.status_label)
 
         threshold_group = QGroupBox("环境报警阈值设置")
         threshold_layout = QVBoxLayout(threshold_group)
         threshold_hint = QLabel("主画面中的实时报警会根据这里设置的上下限判断环境是否超标。")
         threshold_hint.setWordWrap(True)
-        threshold_hint.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 14px;")
+        threshold_hint.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
         threshold_layout.addWidget(threshold_hint)
 
         threshold_grid = QGridLayout()
@@ -1471,6 +1476,8 @@ class EnvironmentControlPanel(QWidget):
         self.apply_fan_button = QPushButton("应用风扇速度")
         self.stop_fan_button = QPushButton("停止风扇")
         self.stop_fan_button.setProperty("variant", "secondary")
+        for btn in (self.apply_fan_button, self.stop_fan_button):
+            btn.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
         self.apply_fan_button.clicked.connect(lambda: self._send_fan_pwm(self.fan_slider.value()))
         self.stop_fan_button.clicked.connect(self._stop_fan)
         button_row.addWidget(self.apply_fan_button)
@@ -1672,12 +1679,12 @@ class HistoryPanel(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
+        layout.setSpacing(10)
 
         header_row = QHBoxLayout()
 
         title = QLabel("历史记录查询")
-        title.setFont(QFont("Microsoft YaHei", 22, QFont.Weight.Bold))
+        title.setFont(QFont("Microsoft YaHei", 18, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
 
         refresh_button = QPushButton("刷新记录")
@@ -1765,16 +1772,14 @@ class HistoryPanel(QWidget):
         recognition_group = QGroupBox("识别历史记录")
         recognition_layout = QVBoxLayout(recognition_group)
         self.recognition_table = QTableWidget()
-        self.recognition_table.setColumnCount(8)
+        self.recognition_table.setColumnCount(6)
         self.recognition_table.setHorizontalHeaderLabels(
             [
                 "时间",
                 "用户",
                 "结果",
                 "植物类型",
-                "植物置信度",
                 "病虫害",
-                "病虫害置信度",
                 "识别间隔(秒)",
             ]
         )
@@ -1804,7 +1809,7 @@ class HistoryPanel(QWidget):
         image_title.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 17px; font-weight: 700;")
         self.detail_image_label = QLabel("识别结果图片将在这里显示")
         self.detail_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.detail_image_label.setMinimumSize(520, 260)
+        self.detail_image_label.setMinimumSize(200, 150)
         self.detail_image_label.setStyleSheet(
             f"background-color: {DASHBOARD_COLORS['panel']}; color: {DASHBOARD_COLORS['muted_dark']}; "
             f"border-radius: 14px; border: 1px solid {DASHBOARD_COLORS['border']};"
@@ -1821,7 +1826,6 @@ class HistoryPanel(QWidget):
         left_splitter.addWidget(recognition_group)
         left_splitter.setStretchFactor(0, 1)
         left_splitter.setStretchFactor(1, 1)
-        left_splitter.setSizes([420, 360])
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
         right_splitter.setChildrenCollapsible(False)
@@ -1829,7 +1833,6 @@ class HistoryPanel(QWidget):
         right_splitter.addWidget(detail_group)
         right_splitter.setStretchFactor(0, 2)
         right_splitter.setStretchFactor(1, 2)
-        right_splitter.setSizes([360, 360])
 
         content_splitter = QSplitter(Qt.Orientation.Horizontal)
         content_splitter.setChildrenCollapsible(False)
@@ -1837,7 +1840,6 @@ class HistoryPanel(QWidget):
         content_splitter.addWidget(right_splitter)
         content_splitter.setStretchFactor(0, 3)
         content_splitter.setStretchFactor(1, 2)
-        content_splitter.setSizes([1100, 620])
         layout.addWidget(content_splitter, 1)
 
     def _init_time_range(self):
@@ -1939,13 +1941,7 @@ class HistoryPanel(QWidget):
                 record.get("username") or "--",
                 record.get("summary", "--"),
                 record.get("plant_type") or "--",
-                "--"
-                if record.get("plant_confidence") is None
-                else f"{record.get('plant_confidence'):.2f}",
                 format_label_for_display(record.get("pest_label")) if record.get("pest_label") else "--",
-                "--"
-                if record.get("pest_confidence") is None
-                else f"{record.get('pest_confidence'):.2f}",
                 "--"
                 if record.get("interval_seconds") is None
                 else f"{record.get('interval_seconds'):.1f}",
@@ -1973,13 +1969,7 @@ class HistoryPanel(QWidget):
             f"用户: {record.get('username') or '--'}",
             f"结果: {record.get('summary', '--')}",
             f"植物类型: {record.get('plant_type') or '--'}",
-            "植物置信度: --"
-            if record.get("plant_confidence") is None
-            else f"植物置信度: {record.get('plant_confidence'):.2f}",
             f"病虫害: {format_label_for_display(record.get('pest_label')) if record.get('pest_label') else '--'}",
-            "病虫害置信度: --"
-            if record.get("pest_confidence") is None
-            else f"病虫害置信度: {record.get('pest_confidence'):.2f}",
             "识别间隔: --"
             if record.get("interval_seconds") is None
             else f"识别间隔: {record.get('interval_seconds'):.1f} 秒",
@@ -2129,7 +2119,10 @@ class PlantSystemWindow(QMainWindow):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setWindowTitle("智能植物管护系统")
-        self.resize(1600, 980)
+        screen_geom = QApplication.primaryScreen().availableGeometry()
+        target_w = min(screen_geom.width(), 1600)
+        target_h = min(screen_geom.height(), 980)
+        self.resize(target_w, target_h)
         self.init_ui()
 
     def init_ui(self):
@@ -2137,17 +2130,17 @@ class PlantSystemWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         layout = QVBoxLayout(central_widget)
-        layout.setSpacing(16)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         title = QLabel("智能植物管护系统")
-        title.setFont(QFont("Microsoft YaHei", 28, QFont.Weight.Bold))
+        title.setFont(QFont("Microsoft YaHei", 22, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
         layout.addWidget(title)
 
         subtitle = QLabel(f"主画面识别监控 + 环境阈值管控 + 历史记录追溯 | 当前用户: {self.username}")
-        subtitle.setFont(QFont("Microsoft YaHei", 15))
+        subtitle.setFont(QFont("Microsoft YaHei", 13))
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']};")
         layout.addWidget(subtitle)
