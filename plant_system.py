@@ -985,6 +985,20 @@ class VideoDetectionPanel(QWidget):
         bottom_splitter.setStretchFactor(0, 1)
         bottom_splitter.setStretchFactor(1, 1)
 
+        def _sync_splitters(pos, _index):
+            sender = self.sender()
+            if sender is top_splitter:
+                bottom_splitter.blockSignals(True)
+                bottom_splitter.setSizes(top_splitter.sizes())
+                bottom_splitter.blockSignals(False)
+            else:
+                top_splitter.blockSignals(True)
+                top_splitter.setSizes(bottom_splitter.sizes())
+                top_splitter.blockSignals(False)
+
+        top_splitter.splitterMoved.connect(_sync_splitters)
+        bottom_splitter.splitterMoved.connect(_sync_splitters)
+
         main_vsplit = QSplitter(Qt.Orientation.Vertical)
         main_vsplit.setChildrenCollapsible(False)
         main_vsplit.addWidget(top_splitter)
@@ -1331,6 +1345,14 @@ class EnvironmentControlPanel(QWidget):
         self.stop_fan_button = None
         self.fan_request_pending = False
         self.fan_slider_dirty = False
+        self.curtain_button = None
+        self.curtain_status_label = None
+        self.curtain_hint_label = None
+        self.curtain_request_pending = False
+        self.pump_button = None
+        self.pump_status_label = None
+        self.pump_hint_label = None
+        self.pump_request_pending = False
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_data)
 
@@ -1449,7 +1471,7 @@ class EnvironmentControlPanel(QWidget):
         control_layout = QHBoxLayout(control_group)
         control_layout.setSpacing(14)
         control_layout.addWidget(self._create_fan_control_card(), 2)
-        control_layout.addWidget(self._create_reserved_control_card(), 1)
+        control_layout.addWidget(self._create_actuator_control_card(), 1)
         layout.addWidget(control_group)
         layout.addStretch(1)
 
@@ -1501,7 +1523,7 @@ class EnvironmentControlPanel(QWidget):
         layout.addLayout(button_row)
         return frame
 
-    def _create_reserved_control_card(self):
+    def _create_actuator_control_card(self):
         frame = QFrame()
         frame.setStyleSheet(
             f"background-color: {DASHBOARD_COLORS['panel']}; border: 1px solid {DASHBOARD_COLORS['border']}; border-radius: 12px;"
@@ -1510,14 +1532,52 @@ class EnvironmentControlPanel(QWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        title_label = QLabel("扩展控制预留")
+        title_label = QLabel("遮阳帘与水泵控制")
         title_label.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']}; font-size: 16px; font-weight: 700;")
         layout.addWidget(title_label)
 
-        info_label = QLabel("后续可以在这里扩展补光、喷淋、遮阳或其他执行器控制。")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 14px; line-height: 1.6;")
-        layout.addWidget(info_label)
+        curtain_row = QHBoxLayout()
+        curtain_row.setSpacing(12)
+        curtain_icon = QLabel("遮阳帘")
+        curtain_icon.setStyleSheet(f"color: #2f7a3f; font-size: 14px; font-weight: 600;")
+        self.curtain_status_label = QLabel("--")
+        self.curtain_status_label.setFont(QFont("Microsoft YaHei", 20, QFont.Weight.Bold))
+        self.curtain_status_label.setStyleSheet("color: #6f7a73;")
+        self.curtain_hint_label = QLabel("等待 BLE 连接...")
+        self.curtain_hint_label.setWordWrap(True)
+        self.curtain_hint_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
+        self.curtain_button = QPushButton("打开遮阳帘")
+        self.curtain_button.setProperty("variant", "secondary")
+        self.curtain_button.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
+        self.curtain_button.clicked.connect(self._toggle_curtain)
+        curtain_row.addWidget(curtain_icon)
+        curtain_row.addWidget(self.curtain_status_label)
+        curtain_row.addStretch(1)
+        curtain_row.addWidget(self.curtain_button)
+        layout.addLayout(curtain_row)
+        layout.addWidget(self.curtain_hint_label)
+
+        pump_row = QHBoxLayout()
+        pump_row.setSpacing(12)
+        pump_icon = QLabel("水泵")
+        pump_icon.setStyleSheet(f"color: #c23b3b; font-size: 14px; font-weight: 600;")
+        self.pump_status_label = QLabel("--")
+        self.pump_status_label.setFont(QFont("Microsoft YaHei", 20, QFont.Weight.Bold))
+        self.pump_status_label.setStyleSheet("color: #6f7a73;")
+        self.pump_hint_label = QLabel("等待 BLE 连接...")
+        self.pump_hint_label.setWordWrap(True)
+        self.pump_hint_label.setStyleSheet(f"color: {DASHBOARD_COLORS['muted_dark']}; font-size: 13px;")
+        self.pump_button = QPushButton("启动水泵")
+        self.pump_button.setProperty("variant", "secondary")
+        self.pump_button.setStyleSheet(f"color: {DASHBOARD_COLORS['ink']};")
+        self.pump_button.clicked.connect(self._toggle_pump)
+        pump_row.addWidget(pump_icon)
+        pump_row.addWidget(self.pump_status_label)
+        pump_row.addStretch(1)
+        pump_row.addWidget(self.pump_button)
+        layout.addLayout(pump_row)
+        layout.addWidget(self.pump_hint_label)
+
         layout.addStretch(1)
         return frame
 
@@ -1612,6 +1672,63 @@ class EnvironmentControlPanel(QWidget):
         self.fan_slider_dirty = True
         self._send_fan_pwm(0)
 
+    def _toggle_curtain(self):
+        if self.curtain_request_pending:
+            return
+        if env_monitor.ble_loop is None:
+            if self.curtain_hint_label is not None:
+                self.curtain_hint_label.setText("BLE 循环尚未就绪")
+            return
+        _status, _snap, _fan, latest = get_live_monitor_snapshot()
+        current_on = latest.get("curtain", False) if latest else False
+        self.curtain_request_pending = True
+        if self.curtain_hint_label is not None:
+            self.curtain_hint_label.setText("正在发送指令...")
+        if self.curtain_button is not None:
+            self.curtain_button.setEnabled(False)
+
+        target = not current_on
+        future = asyncio.run_coroutine_threadsafe(env_monitor.write_curtain(target), env_monitor.ble_loop)
+        future.add_done_callback(lambda done: self._actuator_future_done("curtain", target, done))
+
+    def _toggle_pump(self):
+        if self.pump_request_pending:
+            return
+        if env_monitor.ble_loop is None:
+            if self.pump_hint_label is not None:
+                self.pump_hint_label.setText("BLE 循环尚未就绪")
+            return
+        _status, _snap, _fan, latest = get_live_monitor_snapshot()
+        current_on = latest.get("pump", False) if latest else False
+        self.pump_request_pending = True
+        if self.pump_hint_label is not None:
+            self.pump_hint_label.setText("正在发送指令...")
+        if self.pump_button is not None:
+            self.pump_button.setEnabled(False)
+
+        target = not current_on
+        future = asyncio.run_coroutine_threadsafe(env_monitor.write_pump(target), env_monitor.ble_loop)
+        future.add_done_callback(lambda done: self._actuator_future_done("pump", target, done))
+
+    def _actuator_future_done(self, actuator, target, future):
+        hint_label = self.curtain_hint_label if actuator == "curtain" else self.pump_hint_label
+        button = self.curtain_button if actuator == "curtain" else self.pump_button
+        if actuator == "curtain":
+            self.curtain_request_pending = False
+        else:
+            self.pump_request_pending = False
+        if button is not None:
+            button.setEnabled(True)
+        try:
+            future.result()
+            name = "遮阳帘" if actuator == "curtain" else "水泵"
+            state_text = "开启" if target else "关闭"
+            if hint_label is not None:
+                hint_label.setText(f"{name}已{state_text}")
+        except Exception as exc:
+            if hint_label is not None:
+                hint_label.setText(f"控制失败: {exc}")
+
     def refresh_data(self):
         status_snapshot, _snapshot, fan_snapshot, latest_sensor = get_live_monitor_snapshot()
         if self.status_label is not None:
@@ -1649,6 +1766,52 @@ class EnvironmentControlPanel(QWidget):
             and not self.fan_request_pending
         ):
             self._sync_slider(int(fan_pwm))
+
+        curtain_on = latest_sensor.get("curtain", False) if latest_sensor else False
+        curtain_available = bool(env_monitor.actuator_control_state.get("curtain_char_uuid"))
+        curtain_connected = status_snapshot.get("state") == "connected" and curtain_available
+
+        if self.curtain_status_label is not None:
+            self.curtain_status_label.setText("开启" if curtain_on else "关闭")
+            self.curtain_status_label.setStyleSheet(
+                "color: #2f7a3f; font-size: 20px; font-weight: 700;" if curtain_on
+                else "color: #6f7a73; font-size: 20px; font-weight: 700;"
+            )
+        if self.curtain_button is not None and not self.curtain_request_pending:
+            self.curtain_button.setEnabled(curtain_connected)
+            self.curtain_button.setText("关闭遮阳帘" if curtain_on else "打开遮阳帘")
+        if self.curtain_hint_label is not None and not self.curtain_request_pending:
+            if not curtain_available:
+                self.curtain_hint_label.setText("遮阳帘不可用: 设备不支持")
+            elif not curtain_connected:
+                self.curtain_hint_label.setText("等待 BLE 连接后可控制遮阳帘")
+            elif not curtain_on:
+                self.curtain_hint_label.setText("遮阳帘已关闭")
+            else:
+                self.curtain_hint_label.setText("遮阳帘已开启")
+
+        pump_on = latest_sensor.get("pump", False) if latest_sensor else False
+        pump_available = bool(env_monitor.actuator_control_state.get("pump_char_uuid"))
+        pump_connected = status_snapshot.get("state") == "connected" and pump_available
+
+        if self.pump_status_label is not None:
+            self.pump_status_label.setText("运行中" if pump_on else "停止")
+            self.pump_status_label.setStyleSheet(
+                "color: #c23b3b; font-size: 20px; font-weight: 700;" if pump_on
+                else "color: #6f7a73; font-size: 20px; font-weight: 700;"
+            )
+        if self.pump_button is not None and not self.pump_request_pending:
+            self.pump_button.setEnabled(pump_connected)
+            self.pump_button.setText("停止水泵" if pump_on else "启动水泵")
+        if self.pump_hint_label is not None and not self.pump_request_pending:
+            if not pump_available:
+                self.pump_hint_label.setText("水泵不可用: 设备不支持")
+            elif not pump_connected:
+                self.pump_hint_label.setText("等待 BLE 连接后可控制水泵")
+            elif not pump_on:
+                self.pump_hint_label.setText("水泵已停止")
+            else:
+                self.pump_hint_label.setText("水泵正在运行")
 
     def shutdown(self):
         self.refresh_timer.stop()

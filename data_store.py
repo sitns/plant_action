@@ -80,6 +80,8 @@ def init_database() -> None:
                     light_lux REAL,
                     pressure_hpa REAL,
                     fan_pwm_percent INTEGER,
+                    curtain INTEGER DEFAULT 0,
+                    pump INTEGER DEFAULT 0,
                     wind TEXT,
                     aht20 TEXT,
                     bh1750 TEXT,
@@ -111,6 +113,8 @@ def init_database() -> None:
             )
 
             _ensure_column(conn, "recognition_records", "image_path", "TEXT")
+            _ensure_column(conn, "sensor_records", "curtain", "INTEGER DEFAULT 0")
+            _ensure_column(conn, "sensor_records", "pump", "INTEGER DEFAULT 0")
 
             existing_user = conn.execute(
                 "SELECT 1 FROM users WHERE username = ?",
@@ -154,6 +158,8 @@ def record_sensor_data(point: dict) -> None:
         point.get("light_lux"),
         point.get("pressure_hpa"),
         point.get("fan_pwm_percent"),
+        point.get("curtain", False),
+        point.get("pump", False),
         point.get("wind"),
         point.get("aht20"),
         point.get("bh1750"),
@@ -177,13 +183,15 @@ def record_sensor_data(point: dict) -> None:
                     light_lux,
                     pressure_hpa,
                     fan_pwm_percent,
+                    curtain,
+                    pump,
                     wind,
                     aht20,
                     bh1750,
                     bmp280,
                     millis,
                     raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values,
             )
@@ -256,6 +264,8 @@ def fetch_sensor_records(
             light_lux,
             pressure_hpa,
             fan_pwm_percent,
+            curtain,
+            pump,
             wind,
             aht20,
             bh1750,

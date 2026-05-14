@@ -35,6 +35,8 @@ DEVICE_NAME = "ESP32-EnvSensor"
 SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab"
 CHAR_UUID = "abcdefab-1234-5678-9abc-def012345678"
 FAN_CHAR_UUID = "fedcba98-7654-3210-fedc-ba9876543210"
+CURTAIN_CHAR_UUID = "a1b2c3d4-1234-5678-9abc-def012345678"
+PUMP_CHAR_UUID = "b2c3d4e5-1234-5678-9abc-def012345678"
 MAX_POINTS = 240
 WRITE_PROPERTIES = ("write", "write-without-response")
 BASE_DIR = Path(__file__).resolve().parent
@@ -145,6 +147,16 @@ fan_control_state = {
 ble_loop = None
 ble_client = None
 desired_fan_percent = 0
+desired_curtain = False
+desired_pump = False
+actuator_control_state = {
+    "curtain_supported": False,
+    "pump_supported": False,
+    "curtain_message": "waiting for BLE connection",
+    "pump_message": "waiting for BLE connection",
+    "curtain_char_uuid": None,
+    "pump_char_uuid": None,
+}
 _ble_thread = None
 _ble_thread_lock = threading.Lock()
 
@@ -472,6 +484,37 @@ def resolve_fan_control(client: BleakClient) -> tuple[str | None, bool, str]:
     return None, True, "device does not expose a writable fan-control characteristic"
 
 
+def set_actuator_control_state(actuator: str, supported: bool, message: str, char_uuid: str | None = None) -> None:
+    with history_lock:
+        actuator_control_state[f"{actuator}_supported"] = supported
+        actuator_control_state[f"{actuator}_message"] = message
+        actuator_control_state[f"{actuator}_char_uuid"] = char_uuid
+
+
+async def write_curtain(on: bool) -> None:
+    global desired_curtain
+    client = ble_client
+    if client is None or not client.is_connected:
+        raise RuntimeError("BLE device not connected")
+    await client.write_gatt_char(CURTAIN_CHAR_UUID, b"1" if on else b"0", response=True)
+    desired_curtain = on
+    with history_lock:
+        if history:
+            history[-1]["curtain"] = on
+
+
+async def write_pump(on: bool) -> None:
+    global desired_pump
+    client = ble_client
+    if client is None or not client.is_connected:
+        raise RuntimeError("BLE device not connected")
+    await client.write_gatt_char(PUMP_CHAR_UUID, b"1" if on else b"0", response=True)
+    desired_pump = on
+    with history_lock:
+        if history:
+            history[-1]["pump"] = on
+
+
 def _as_float(value):
     if value is None:
         return None
@@ -490,7 +533,19 @@ def handle_notification(_sender, data: bytearray) -> None:
         payload = json.loads(text)
 
         if isinstance(payload, list):
-            if len(payload) >= 7:
+            curtain_on = False
+            pump_on = False
+            if len(payload) >= 9:
+                soil_humidity = payload[0] if len(payload) > 0 else None
+                air_temperature = payload[1] if len(payload) > 1 else None
+                air_humidity = payload[2] if len(payload) > 2 else None
+                wind_speed = payload[3] if len(payload) > 3 else None
+                light_lux = payload[4] if len(payload) > 4 else None
+                pressure_hpa = payload[5] if len(payload) > 5 else None
+                fan_pwm_percent = payload[6] if len(payload) > 6 else 0
+                curtain_on = bool(int(payload[7])) if len(payload) > 7 else False
+                pump_on = bool(int(payload[8])) if len(payload) > 8 else False
+            elif len(payload) >= 7:
                 soil_humidity = payload[0] if len(payload) > 0 else None
                 air_temperature = payload[1] if len(payload) > 1 else None
                 air_humidity = payload[2] if len(payload) > 2 else None
@@ -537,6 +592,8 @@ def handle_notification(_sender, data: bytearray) -> None:
             light_lux = payload.get("lightLux")
             pressure_hpa = payload.get("pressureHpa")
             fan_pwm_percent = payload.get("fanPwmPercent", 0)
+            curtain_on = bool(int(payload.get("curtain", 0)))
+            pump_on = bool(int(payload.get("pump", 0)))
             millis = int(payload.get("millis", 0))
             soil_state = payload.get(
                 "soilState",
@@ -568,6 +625,8 @@ def handle_notification(_sender, data: bytearray) -> None:
             "light_lux": _as_float(light_lux),
             "pressure_hpa": _as_float(pressure_hpa),
             "fan_pwm_percent": _as_int(fan_pwm_percent) if fan_pwm_percent is not None else 0,
+            "curtain": curtain_on,
+            "pump": pump_on,
             "wind": wind_state,
             "aht20": aht20_state,
             "bh1750": bh1750_state,
@@ -578,7 +637,7 @@ def handle_notification(_sender, data: bytearray) -> None:
             history.append(point)
         try:
             record_sensor_data(point)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             update_status("warn", f"database write failed: {exc}")
     except (TypeError, ValueError, json.JSONDecodeError):
         update_status("warn", f"invalid payload: {text[:50]}")
@@ -611,7 +670,7 @@ async def write_fan_pwm(percent: int) -> None:
 
 
 async def ble_worker() -> None:
-    global ble_client
+    global ble_client, desired_curtain, desired_pump
 
     while True:
         try:
@@ -637,25 +696,47 @@ async def ble_worker() -> None:
                 fan_char_uuid, fan_response, fan_message = resolve_fan_control(client)
                 if fan_char_uuid is None:
                     set_fan_control_state(False, fan_message)
-                    update_status("connected", f"receiving notifications | {fan_message}")
+                    fan_ready = False
                 else:
                     set_fan_control_state(True, fan_message, fan_char_uuid, fan_response)
+
+                set_actuator_control_state("curtain", True, "ok", CURTAIN_CHAR_UUID)
+                set_actuator_control_state("pump", True, "ok", PUMP_CHAR_UUID)
+
+                status_parts = ["receiving notifications"]
+                try:
+                    await write_fan_pwm(desired_fan_percent) if fan_char_uuid else None
+                except Exception as exc:
+                    set_fan_control_state(False, f"fan init failed: {exc}")
+                    status_parts.append(f"fan init failed: {exc}")
+
+                if desired_curtain:
                     try:
-                        await write_fan_pwm(desired_fan_percent)
-                        update_status("connected", "receiving notifications | fan control ready")
+                        await write_curtain(desired_curtain)
                     except Exception as exc:
-                        set_fan_control_state(False, f"fan initialization failed: {exc}")
-                        update_status("connected", f"receiving notifications | fan init failed: {exc}")
+                        status_parts.append(f"curtain init: {exc}")
+
+                if desired_pump:
+                    try:
+                        await write_pump(desired_pump)
+                    except Exception as exc:
+                        status_parts.append(f"pump init: {exc}")
+
+                update_status("connected", " | ".join(status_parts))
 
                 while client.is_connected:
                     await asyncio.sleep(1.0)
 
             ble_client = None
             set_fan_control_state(False, "waiting for BLE connection")
+            set_actuator_control_state("curtain", False, "waiting for BLE connection")
+            set_actuator_control_state("pump", False, "waiting for BLE connection")
             update_status("scan", "disconnected, retrying")
         except Exception as exc:  # pylint: disable=broad-except
             ble_client = None
             set_fan_control_state(False, str(exc))
+            set_actuator_control_state("curtain", False, str(exc))
+            set_actuator_control_state("pump", False, str(exc))
             update_status("error", str(exc))
             await asyncio.sleep(2.0)
 
